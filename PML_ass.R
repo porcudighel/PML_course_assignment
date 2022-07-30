@@ -327,3 +327,8 @@ ncol(CM_rpart)+1
 
 CM_count_rpart <- confusionMatrix(reduced_train$classe, predict(cv_rpart_Fit, newdata = reduced_train))
 CM_count_LDA <- confusionMatrix(reduced_train$classe, predict(fit_LDA, newdata = reduced_train))
+                                
+pairs(new_training[,1:5])
+
+library(GGally); library(ggplot2)
+ggpairs(new_training[,c(53,1:4)], lower = list(continuous = "smooth"))

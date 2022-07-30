@@ -7,18 +7,18 @@ output: html_document
 
 ```{r setoptions, echo = FALSE}
 library(knitr)
-opts_chunk$set(echo = TRUE, results = "as is", message = FALSE, warning = FALSE)
+opts_chunk$set(echo = FALSE, results = "as is", message = FALSE, warning = FALSE)
 ```
 
 ## Introduction
 
-In order to quantify how well an exercise is performed, data were acquired via accelerometers on belt, forearm, arm, and dumbell of 6 participants, while performing barbell lifts correctly and incorrectly in 5 different ways, identified in the data as variable classe (source: <http://groupware.les.inf.puc-rio.br/har>). The aim is to enable recognition of the quality of the activity via a classification algorithm. Via exploratory data analysis, the variables to perform classification were individuated, and further reduced in number through correlation analysis. Tests with simpler classification models revealed poor performance, after which random forest was selected. The model yield OOB estimate of error of 0.51%, with average accuracy 99.28%, both estimated by using cross validation.
+In order to quantify how well an exercise is performed, data were acquired via accelerometers on belt, forearm, arm, and dumbell of 6 participants, while performing barbell lifts correctly and incorrectly in 5 different ways, identified in the data as variable classe (source: <http://groupware.les.inf.puc-rio.br/har>). The aim is to enable recognition of the quality of the activity via a classification algorithm. Via exploratory data analysis, the variables to perform classification were individuated, and further reduced in number through correlation analysis. Tests with simpler classification models revealed poor performance, after which random forest was selected. The model yield OOB estimate of error less than 1%, with average accuracy over 99%, both estimated by using cross validation.
 
 The final prediction on 20 test samples yields 100% accuracy, if the correlation between window number and activity class detected in the training data holds for the test data as well.
 
 ## EDA and tidying
 
-```{r, EDA, echo = FALSE}
+```{r, EDA}
 ## Download data
 pml_training<- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv")
 pml_testing<- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv")
@@ -54,6 +54,7 @@ Furthermore, an invalid entry check in the train data reveals `r cols_missing` m
 ### Multicollinearity
 
 ```{r, correlation}
+# check for multicollinearity
 library(caret)
 cor_mat = cor(new_training[-53])
 
@@ -67,10 +68,12 @@ reduced_train$classe <- as.factor(reduced_train$classe)
 
 In view of building a prediction model with faster execution and lower variance, a check on multicollinearity is done and the columns having over 0.8 correlation value are removed, leaving only `r red_cols-1` variables. A check for near zero variance confirmed that the reduced dataset has no issues. Finally classe was factorised.
 
-Furthermore, several variables were plotted against classe, and some were evidently showing difference between different classes. As an example, the median of the roll_forearm variable is clearly higher for classe C.
+Furthermore, plotting several variables against classe, shows differences between classes.
 
-```{r, EDAplot, fig.align = "center", out.width = "50%", fig.cap = "**Fig.1**: *Box and whisker showing the spread of the roll_forearm data across the 5 classes.*"}
-boxplot(reduced_train$roll_forearm ~ reduced_train$classe, xlab = "classe", ylab = "roll_forearm") # C median higher
+```{r, EDAplot, fig.align = "center", out.width = "50%", fig.cap = "**Fig.1**: *Relationship between classe and several variables.*"}
+# EDA plot
+library(GGally); library(ggplot2)
+ggpairs(new_training[,c(53,1:4)], lower = list(continuous = "smooth"))
 ```
 
 ## Model
@@ -91,22 +94,22 @@ CM_LDA <- confusionMatrix.train(fit_LDA)
 Acc_lda <- round(sum(diag(CM_LDA$table)),2)
 ```
 
-```{r, Confusion_rpart, echo = FALSE}
+```{r, Confusion_simple, echo = FALSE}
 library(kableExtra)
 CM_count_rpart <- confusionMatrix(reduced_train$classe, predict(cv_rpart_Fit, newdata = reduced_train))
-knitr::kable(CM_count_rpart$table, align = 'l', caption = 
-        "**Table 1**: Confusion table for regression with Recursive Partitioning.") %>% 
-        kable_styling(full_width = F) %>% add_header_above(c("Observed" = ncol(CM_count_rpart$table)+1)) %>%
-        group_rows("Predicted",1,5) %>% column_spec(1, bold = TRUE, width = "7em")
-```
-
-```{r, Confusion_LDA, echo = FALSE}
-library(kableExtra)
 CM_count_LDA <- confusionMatrix(reduced_train$classe, predict(fit_LDA, newdata = reduced_train))
-knitr::kable(CM_count_LDA$table, align = 'r', caption = 
-        "**Table 2**: Confusion table for regression with Linear Discriminant Analysis.") %>% 
-        kable_styling(full_width = F) %>% add_header_above(c("Observed" = ncol(CM_count_LDA$table)+1)) %>%
-        group_rows("Predicted",1,5) %>% column_spec(1, bold = TRUE, width = "7em")
+rpart_k <- knitr::kable(CM_count_rpart$table, caption = 
+        "**Table 1**: *Confusion matrix for regression with Recursive Partitioning*.") %>% 
+        kable_styling(full_width = F, position = 'float_left') %>% 
+        add_header_above(c("Observed" = ncol(CM_count_rpart$table)+1)) %>%
+        group_rows("Predicted - rpart",1,5) %>% column_spec(1, bold = TRUE, width = "7em")
+LDA_k <- knitr::kable(CM_count_LDA$table, caption = 
+        "**Table 2**: *Confusion matrix for regression with Linear Discriminant Analysis*.") %>% 
+        kable_styling(full_width = F, position = 'left') %>% 
+        add_header_above(c("Observed" = ncol(CM_count_LDA$table)+1)) %>%
+        group_rows("Predicted - lda",1,5) %>% column_spec(1, bold = TRUE, width = "7em")
+rpart_k
+LDA_k
 ```
 
 Use of simpler methods such as Recursive Partitioning (*rpart*) and Linear Discriminant Analysis (*LDA*) yields low accuracy (`r Acc_rpart`% and `r Acc_lda`% respectively), suggesting the need for a more computationally requiring method.
@@ -114,17 +117,10 @@ Use of simpler methods such as Recursive Partitioning (*rpart*) and Linear Discr
 ```{r, gbm, cache = TRUE}
 # gbm booster predictor
 library(gbm)
-fit_B <- train(classe ~., method = "gbm", data = reduced_train, verbose = FALSE, trControl = trainControl(method="cv",number=5))
-CM_B <- confusionMatrix.train(fit_B)
-CM_B
+fit_gbm <- train(classe ~., method = "gbm", data = reduced_train, verbose = FALSE, trControl = trainControl(method="cv",number=5))
+CM_B <- confusionMatrix.train(fit_gbm)
 Acc_gbm <- round(sum(diag(CM_B$table)),2) 
 ```
-
-```{r, Confusion_gbm}
-#knitr::kable(CM_B, align = 'c', caption = "**Table 3**: Confusion table for regression with gradient Boosting Machine.") %>% kable_styling(full_width = F)
-```
-
-Employing a Gradient Boosting Machine (*gbm*) gives an accuracy of `r Acc_gbm`%, which is quite an improvement.
 
 ```{r, rand_for, cache = TRUE}
 library(parallel) 
@@ -142,23 +138,33 @@ stopCluster(cl)
 registerDoSEQ()
 # Calculate accuracy
 CM_rf <- confusionMatrix.train(cv_rf_Fit) 
-CM_rf
 Acc_rf <- round(sum(diag(CM_rf$table)),2)
 # Calculate OOB error
 CM_count_rf <- cv_rf_Fit$finalModel$confusion
 OOB_rf <- round((sum(CM_count_rf)-sum(diag(CM_count_rf)))/sum(CM_count_rf)*100,2)
 ```
 
-```{r, Confusion_rf}
-#knitr::kable(CM_rf, align = 'c', caption = "**Table 4**: Confusion table for regression with Random Forest.") %>% kable_styling(full_width = F)
+```{r, Confusion_gbm_rf}
+CM_count_gbm <- confusionMatrix(reduced_train$classe, predict(fit_gbm, newdata = reduced_train))
+CM_count2_rf <- confusionMatrix(reduced_train$classe, predict(cv_rf_Fit, newdata = reduced_train))
+gbm_k <- knitr::kable(CM_count_gbm$table, caption = 
+        "**Table 3**: *Confusion matrix for regression with Gradient Boosting Machine*.") %>% 
+        kable_styling(full_width = F, position = 'float_left') %>% 
+        add_header_above(c("Observed" = ncol(CM_count_rpart$table)+1)) %>%
+        group_rows("Predicted - gbm",1,5) %>% column_spec(1, bold = TRUE, width = "7em")
+rf_k <- knitr::kable(CM_count2_rf$table, caption = 
+        "**Table 4**: *Confusion matrix for regression with Random Forest*.") %>% 
+        kable_styling(full_width = F, position = 'left') %>% 
+        add_header_above(c("Observed" = ncol(CM_count_LDA$table)+1)) %>%
+        group_rows("Predicted - rf",1,5) %>% column_spec(1, bold = TRUE, width = "7em")
+gbm_k
+rf_k
 ```
-
-Random Forest provides average accuracy from cross validation of `r Acc_rf`%. Instead of the Out Of Sample error, the Out Of Bag error is estimated, yielding a value of `r OOB_rf`%. These metrics show that model obtained with random forest method is satisfactory.
+Employing a Gradient Boosting Machine (*gbm*) gives an accuracy of `r Acc_gbm`%, which is quite an improvement, while Random Forest provides average accuracy from cross validation of `r Acc_rf`%, which shows that model obtained with random forest method is satisfactory. For the latter, instead of the Out Of Sample error, the Out Of Bag error is estimated, yielding a value of `r OOB_rf`%.
 
 ## Prediction
 ```{r, prediction}
 predictions <- predict(cv_rf_Fit,newdata = reduced_test)
-predictions
 ```
 
 The predicted classe for the samples in the test dataset is the following:
@@ -166,3 +172,7 @@ The predicted classe for the samples in the test dataset is the following:
 `r predictions`
 
 If actual num_window in test data has the same correspondence to classe as in the training dataset, there is a 100% correct prediction.
+
+## Code
+```{r ref.label=knitr::all_labels(), echo=TRUE, eval=FALSE}
+```
