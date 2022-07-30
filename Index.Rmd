@@ -1,0 +1,178 @@
+---
+title: "Weight lifting - Classifying the quality of the exercise via sensor data"
+author: "AM"
+date: "26 July 2022"
+output: html_document
+---
+
+```{r setoptions, echo = FALSE}
+library(knitr)
+opts_chunk$set(echo = FALSE, results = "as is", message = FALSE, warning = FALSE)
+```
+
+## Introduction
+
+In order to quantify how well an exercise is performed, data were acquired via accelerometers on belt, forearm, arm, and dumbell of 6 participants, while performing barbell lifts correctly and incorrectly in 5 different ways, identified in the data as variable classe (source: <http://groupware.les.inf.puc-rio.br/har>). The aim is to enable recognition of the quality of the activity via a classification algorithm. Via exploratory data analysis, the variables to perform classification were individuated, and further reduced in number through correlation analysis. Tests with simpler classification models revealed poor performance, after which random forest was selected. The model yield OOB estimate of error less than 1%, with average accuracy over 99%, both estimated by using cross validation.
+
+The final prediction on 20 test samples yields 100% accuracy, if the correlation between window number and activity class detected in the training data holds for the test data as well.
+
+## EDA and tidying
+
+```{r, EDA}
+## Download data
+pml_training<- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv")
+pml_testing<- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv")
+# EDA and tidying
+dimTr <- dim(pml_training)
+dimTe <- dim(pml_testing)
+num_classe <- unique(pml_training$classe) # 5 classes
+meas <- length(grep("belt|arm|dumb", names(pml_training), ignore.case = TRUE)) # 38 measurements columns per sensor
+# Check NAs in train
+na_count <- sapply(pml_training,function(x) sum(is.na(x)))
+num_nacount <- unique(na_count) # [1]     0 19216
+prop_missing <- max(na_count)/dim(pml_training)[1] # for many columns 97% of the values are missing
+cols_missing <- sum(na_count == max(na_count)) # 67 columns with 97% missing vals: we will be left with 93 variables
+# Check NAs in test
+na_count_tst <- sapply(pml_testing,function(x) sum(is.na(x)))
+num_na_tst <- unique(na_count_tst) # 0 20
+notna_names <- names(na_count_tst[na_count_tst != max(na_count_tst)]) # cols with values
+not_NA_cols <- length(notna_names) # cols with values
+# Remove columns: first the empty test columns, then the identifier columns
+new_testing <- pml_testing[, names(pml_testing) %in% c(notna_names,"classe")]
+new_training <- pml_training[, names(pml_training) %in% c(notna_names,"classe")]
+new_training <- new_training[,c(8:60)]
+new_testing <- new_testing[,c(8:60)]
+num_cols <- dim(new_training)[2]
+```
+
+### Missing values
+
+The downloaded data have `r dimTr[2]` columns, with `r dimTr[1]` samples for the training data and `r dimTe[1]` for the testing. 
+For each sample, the classe variable identifies the mode of execution, `r meas` variables are measurements records (`r meas/4` per sensor), and the remaining `r dimTr[2] - meas - 1` are identifiers for the user, time and exercise window. The latter variables will therefore be removed. 
+Furthermore, an invalid entry check in the train data reveals `r cols_missing` measurements columns with `r round(prop_missing * 100,2)`% missing values. A similar check on  the test data shows that only `r not_NA_cols` columns are not empty. Hence, the empty test columns will be removed from both datasets, obtaining datasets with `r num_cols` columns.
+
+### Multicollinearity
+
+```{r, correlation}
+# check for multicollinearity
+library(caret)
+cor_mat = cor(new_training[-53])
+
+hc = findCorrelation(cor_mat, cutoff = 0.8)
+hc = sort(hc)
+reduced_train = new_training[,-c(hc)]
+reduced_test = new_testing[,-c(hc)]
+red_cols <- dim(reduced_train)[2]
+reduced_train$classe <- as.factor(reduced_train$classe)
+```
+
+In view of building a prediction model with faster execution and lower variance, a check on multicollinearity is done and the columns having over 0.8 correlation value are removed, leaving only `r red_cols-1` variables. A check for near zero variance confirmed that the reduced dataset has no issues. Finally classe was factorised.
+
+Furthermore, plotting several variables against classe, shows differences between classes.
+
+```{r, EDAplot, fig.align = "center", out.width = "50%", fig.cap = "**Fig.1**: *Relationship between classe and several variables.*"}
+# EDA plot
+library(GGally); library(ggplot2)
+ggpairs(new_training[,c(53,1:4)], lower = list(continuous = "smooth"))
+```
+
+## Model
+
+The model is tested via cross-validation, given the limited number of samples in the test dataset and the requirements for the present assignment. For computational speed reasons, 5-fold cross validation will be performed, together with parallelization when necessary. The performance of the different methods is monitored via the average cross-validation accuracy.
+
+```{r, simpler}
+# rpart
+set.seed(11111)
+library(caret)
+cv_rpart_Fit <- train(classe ~.,data = reduced_train, method="rpart",
+                      trControl = trainControl(method="cv",number=5)) 
+CM_rpart <- confusionMatrix.train(cv_rpart_Fit)
+Acc_rpart <- round(sum(diag(CM_rpart$table)),2)
+# lda
+fit_LDA <- train(classe ~., method = "lda", data = reduced_train, trControl = trainControl(method="cv",number=5))
+CM_LDA <- confusionMatrix.train(fit_LDA)
+Acc_lda <- round(sum(diag(CM_LDA$table)),2)
+```
+
+```{r, Confusion_simple, echo = FALSE}
+library(kableExtra)
+CM_count_rpart <- confusionMatrix(reduced_train$classe, predict(cv_rpart_Fit, newdata = reduced_train))
+CM_count_LDA <- confusionMatrix(reduced_train$classe, predict(fit_LDA, newdata = reduced_train))
+rpart_k <- knitr::kable(CM_count_rpart$table, caption = 
+        "**Table 1**: *Confusion matrix for regression with Recursive Partitioning*.") %>% 
+        kable_styling(full_width = F, position = 'float_left') %>% 
+        add_header_above(c("Observed" = ncol(CM_count_rpart$table)+1)) %>%
+        group_rows("Predicted - rpart",1,5) %>% column_spec(1, bold = TRUE, width = "7em")
+LDA_k <- knitr::kable(CM_count_LDA$table, caption = 
+        "**Table 2**: *Confusion matrix for regression with Linear Discriminant Analysis*.") %>% 
+        kable_styling(full_width = F, position = 'left') %>% 
+        add_header_above(c("Observed" = ncol(CM_count_LDA$table)+1)) %>%
+        group_rows("Predicted - lda",1,5) %>% column_spec(1, bold = TRUE, width = "7em")
+rpart_k
+LDA_k
+```
+
+Use of simpler methods such as Recursive Partitioning (*rpart*) and Linear Discriminant Analysis (*LDA*) yields low accuracy (`r Acc_rpart`% and `r Acc_lda`% respectively), suggesting the need for a more computationally requiring method.
+
+```{r, gbm, cache = TRUE}
+# gbm booster predictor
+library(gbm)
+fit_gbm <- train(classe ~., method = "gbm", data = reduced_train, verbose = FALSE, trControl = trainControl(method="cv",number=5))
+CM_B <- confusionMatrix.train(fit_gbm)
+Acc_gbm <- round(sum(diag(CM_B$table)),2) 
+```
+
+```{r, rand_for, cache = TRUE}
+library(parallel) 
+# Calculate the number of cores for parallel computation
+no_cores <- detectCores() - 1
+library(doParallel)
+# create the cluster for caret to use
+cl <- makePSOCKcluster(no_cores)
+registerDoParallel(cl)
+library(randomForest)
+set.seed(11111)
+cv_rf_Fit <- train(classe ~.,data = reduced_train, method="rf",
+                   trControl = trainControl(method="cv",number=5), allowParallel = TRUE) 
+stopCluster(cl)
+registerDoSEQ()
+# Calculate accuracy
+CM_rf <- confusionMatrix.train(cv_rf_Fit) 
+Acc_rf <- round(sum(diag(CM_rf$table)),2)
+# Calculate OOB error
+CM_count_rf <- cv_rf_Fit$finalModel$confusion
+OOB_rf <- round((sum(CM_count_rf)-sum(diag(CM_count_rf)))/sum(CM_count_rf)*100,2)
+```
+
+```{r, Confusion_gbm_rf}
+CM_count_gbm <- confusionMatrix(reduced_train$classe, predict(fit_gbm, newdata = reduced_train))
+CM_count2_rf <- confusionMatrix(reduced_train$classe, predict(cv_rf_Fit, newdata = reduced_train))
+gbm_k <- knitr::kable(CM_count_gbm$table, caption = 
+        "**Table 3**: *Confusion matrix for regression with Gradient Boosting Machine*.") %>% 
+        kable_styling(full_width = F, position = 'float_left') %>% 
+        add_header_above(c("Observed" = ncol(CM_count_rpart$table)+1)) %>%
+        group_rows("Predicted - gbm",1,5) %>% column_spec(1, bold = TRUE, width = "7em")
+rf_k <- knitr::kable(CM_count2_rf$table, caption = 
+        "**Table 4**: *Confusion matrix for regression with Random Forest*.") %>% 
+        kable_styling(full_width = F, position = 'left') %>% 
+        add_header_above(c("Observed" = ncol(CM_count_LDA$table)+1)) %>%
+        group_rows("Predicted - rf",1,5) %>% column_spec(1, bold = TRUE, width = "7em")
+gbm_k
+rf_k
+```
+Employing a Gradient Boosting Machine (*gbm*) gives an accuracy of `r Acc_gbm`%, which is quite an improvement, while Random Forest provides average accuracy from cross validation of `r Acc_rf`%, which shows that model obtained with random forest method is satisfactory. For the latter, instead of the Out Of Sample error, the Out Of Bag error is estimated, yielding a value of `r OOB_rf`%.
+
+## Prediction
+```{r, prediction}
+predictions <- predict(cv_rf_Fit,newdata = reduced_test)
+```
+
+The predicted classe for the samples in the test dataset is the following:
+
+`r predictions`
+
+If actual num_window in test data has the same correspondence to classe as in the training dataset, there is a 100% correct prediction.
+
+## Code
+```{r ref.label=knitr::all_labels(), echo=TRUE, eval=FALSE}
+```
